@@ -1,0 +1,15 @@
+{
+  "name": "copy-frame",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Point. Copy. For AI.",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.315",
+    "esbuild": "^0.25.3",
+    "typescript": "^5.8.3"
+  }
+}
