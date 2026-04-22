@@ -1,4 +1,4 @@
-# Copy Frame
+﻿# Copy Frame
 
 一个面向页面结构定位场景的 Chrome 扩展。
 
