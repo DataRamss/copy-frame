@@ -109,15 +109,6 @@ npm run build
 - `build.mjs`：构建脚本
 - `插件使用说明.md`：更完整的中文使用说明
 
-## 准备发布到 GitHub
-
-建议在 GitHub 仓库中补充这些内容：
-
-- 项目截图或演示 GIF
-- Chrome 扩展加载步骤截图
-- 已知限制和适用场景
-- 后续计划与 issue 反馈入口
-
 ## License
 
-如果你准备公开发布，建议补一个开源许可证，例如 MIT。
+本项目采用 MIT License，详见 `LICENSE` 文件。
