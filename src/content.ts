@@ -50,6 +50,7 @@ const TOAST_CHAR_STAGGER_MS = 16;
 const TOAST_CHAR_STAGGER_CAP_MS = 180;
 const TOAST_CHAR_ENTER_MS = 180;
 const TOAST_SETTINGS_REVEAL_BUFFER_MS = 40;
+const SHORTCUT_TOKEN_LEAVE_MS = 180;
 const GENERIC_CLASS_NAMES = new Set([
   "active",
   "body",
@@ -86,16 +87,19 @@ class CopyFrameInspector {
   private readonly toastSettingsButtonEl: HTMLButtonElement;
   private readonly settingsPanelEl: HTMLDivElement;
   private readonly settingsInputEl: HTMLInputElement;
+  private readonly settingsShortcutFieldEl: HTMLDivElement;
+  private readonly settingsShortcutTokenEl: HTMLSpanElement;
   private readonly settingsStatusEl: HTMLDivElement;
   private readonly settingsCloseButtonEl: HTMLButtonElement;
+  private readonly settingsSaveButtonEl: HTMLButtonElement;
   private readonly settingsFormEl: HTMLFormElement;
-  private readonly toggleShortcutReferenceEl: HTMLSpanElement;
   private currentElement: Element | null = null;
   private hoverElement: Element | null = null;
   private currentDescriptor: SelectionDescriptor | null = null;
   private toastTimer: number | null = null;
   private toastCleanupTimer: number | null = null;
   private toastSettingsRevealTimer: number | null = null;
+  private shortcutTokenLeaveTimer: number | null = null;
   private refreshFrame: number | null = null;
   private pointerClientX: number | null = null;
   private pointerClientY: number | null = null;
@@ -105,6 +109,7 @@ class CopyFrameInspector {
   private toggleShortcut: ShortcutConfig = parseShortcut(DEFAULT_TOGGLE_SHORTCUT)!;
   private settingsVisible = false;
   private toastVisible = false;
+  private shortcutInputFocused = false;
 
   constructor() {
     this.host = document.createElement("div");
@@ -469,22 +474,114 @@ class CopyFrameInspector {
           gap: 0;
         }
 
+        .cf-settings__shortcut-field {
+          position: relative;
+          flex: 1;
+          min-width: 0;
+          display: flex;
+          align-items: center;
+          border: 1px solid #d1d5db;
+          background: #fafafa;
+          box-sizing: border-box;
+          overflow: hidden;
+          transition:
+            border-color 120ms ease-out,
+            background 120ms ease-out,
+            box-shadow 120ms ease-out;
+        }
+
+        .cf-settings__shortcut-field.is-focused {
+          border-color: #111827;
+          background: #ffffff;
+          box-shadow: inset 3px 0 0 #111827;
+        }
+
+        .cf-settings__shortcut-token {
+          position: absolute;
+          left: 10px;
+          top: 50%;
+          max-width: calc(100% - 20px);
+          padding: 2px 8px;
+          border-radius: 4px;
+          background: #f3f4f6;
+          color: #111827;
+          font-size: 12px;
+          line-height: 1.35;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          transform: translate(0, -50%);
+          opacity: 1;
+          pointer-events: none;
+          isolation: isolate;
+        }
+
+        .cf-settings__shortcut-token::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          z-index: -1;
+          border-radius: inherit;
+          background: #e5e7eb;
+          opacity: 0;
+          transform: translateX(-100%);
+        }
+
+        .cf-settings__shortcut-field.is-focused .cf-settings__shortcut-token::before {
+          opacity: 1;
+          transform: translateX(0);
+          animation: cf-shortcut-token-enter 180ms cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        .cf-settings__shortcut-field.is-leaving .cf-settings__shortcut-token::before {
+          opacity: 0;
+          transform: translateX(100%);
+          animation: cf-shortcut-token-leave 180ms cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        @keyframes cf-shortcut-token-enter {
+          from {
+            opacity: 0;
+            transform: translateX(-100%);
+          }
+
+          to {
+            opacity: 1;
+            transform: translateX(0);
+          }
+        }
+
+        @keyframes cf-shortcut-token-leave {
+          from {
+            opacity: 1;
+            transform: translateX(0);
+          }
+
+          to {
+            opacity: 0;
+            transform: translateX(100%);
+          }
+        }
+
         .cf-settings__input {
           flex: 1;
           min-width: 0;
           padding: 9px 10px;
-          border: 1px solid #d1d5db;
-          background: #fafafa;
-          color: #111827;
+          border: 0;
+          background: transparent;
+          color: transparent;
+          caret-color: transparent;
           font: inherit;
           font-size: 13px;
           box-sizing: border-box;
         }
 
+        .cf-settings__input::selection {
+          background: transparent;
+        }
+
         .cf-settings__input:focus {
           outline: none;
-          border: 1px solid #111827;
-          border-radius: 0;
           box-shadow: none;
         }
 
@@ -507,9 +604,9 @@ class CopyFrameInspector {
 
         .cf-settings__item {
           display: grid;
-          grid-template-columns: minmax(0, 1fr) auto;
+          grid-template-columns: minmax(72px, 1fr) minmax(0, auto);
           align-items: center;
-          gap: 10px;
+          gap: 8px;
           padding: 7px 8px;
           background: #ffffff;
           font-size: 12px;
@@ -525,7 +622,7 @@ class CopyFrameInspector {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          max-width: 150px;
+          max-width: 172px;
           padding: 2px 8px;
           border-radius: 4px;
           background: #f9f9f9;
@@ -544,12 +641,16 @@ class CopyFrameInspector {
           .cf-toast,
           .cf-toast__surface,
           .cf-toast-char,
-          .cf-toast__settings {
+          .cf-toast__settings,
+          .cf-settings__shortcut-field,
+          .cf-settings__shortcut-token {
             transition: none !important;
+            animation: none !important;
           }
 
           .cf-toast__surface,
-          .cf-toast-char {
+          .cf-toast-char,
+          .cf-settings__shortcut-token {
             transform: none !important;
             filter: none !important;
           }
@@ -589,7 +690,10 @@ class CopyFrameInspector {
           <form class="cf-settings__field">
             <div class="cf-settings__label">启动快捷键</div>
             <div class="cf-settings__row">
-              <input class="cf-settings__input" id="cf-toggle-shortcut" type="text" autocomplete="off" placeholder="${DEFAULT_TOGGLE_SHORTCUT}" readonly />
+              <div class="cf-settings__shortcut-field">
+                <input class="cf-settings__input" id="cf-toggle-shortcut" type="text" autocomplete="off" placeholder="${DEFAULT_TOGGLE_SHORTCUT}" readonly />
+                <span class="cf-settings__shortcut-token" aria-hidden="true">${DEFAULT_TOGGLE_SHORTCUT}</span>
+              </div>
               <button class="cf-settings__save" type="submit">保存</button>
             </div>
           </form>
@@ -597,34 +701,12 @@ class CopyFrameInspector {
           <div class="cf-settings__field">
             <div class="cf-settings__section">快捷键与操作</div>
             <div class="cf-settings__reference">
-              <div class="cf-settings__group">
-                <div class="cf-settings__section">开关</div>
-                <div class="cf-settings__list">
-                  <div class="cf-settings__item"><span class="cf-settings__action">开启 / 关闭检查</span><span class="cf-settings__kbd" data-cf-toggle-shortcut>${DEFAULT_TOGGLE_SHORTCUT}</span></div>
-                  <div class="cf-settings__item"><span class="cf-settings__action">插件图标开关</span><span class="cf-settings__kbd cf-settings__kbd--soft">点击图标</span></div>
-                  <div class="cf-settings__item"><span class="cf-settings__action">检查中关闭插件</span><span class="cf-settings__kbd">Esc</span></div>
-                </div>
-              </div>
-              <div class="cf-settings__group">
-                <div class="cf-settings__section">锁定后</div>
-                <div class="cf-settings__list">
-                  <div class="cf-settings__item"><span class="cf-settings__action">复制描述</span><span class="cf-settings__kbd">Ctrl/Cmd+C</span></div>
-                  <div class="cf-settings__item"><span class="cf-settings__action">撤销到上次锁定</span><span class="cf-settings__kbd">Ctrl/Cmd+Z</span></div>
-                  <div class="cf-settings__item"><span class="cf-settings__action">下一个同级</span><span class="cf-settings__kbd">Tab</span></div>
-                  <div class="cf-settings__item"><span class="cf-settings__action">上一个同级</span><span class="cf-settings__kbd">Shift+Tab</span></div>
-                  <div class="cf-settings__item"><span class="cf-settings__action">进入子元素</span><span class="cf-settings__kbd">Enter</span></div>
-                  <div class="cf-settings__item"><span class="cf-settings__action">回到父元素</span><span class="cf-settings__kbd">Shift+Enter</span></div>
-                  <div class="cf-settings__item"><span class="cf-settings__action">退出锁定</span><span class="cf-settings__kbd">Esc</span></div>
-                </div>
-              </div>
-              <div class="cf-settings__group">
-                <div class="cf-settings__section">鼠标</div>
-                <div class="cf-settings__list">
-                  <div class="cf-settings__item"><span class="cf-settings__action">悬停查看区域</span><span class="cf-settings__kbd cf-settings__kbd--soft">移动鼠标</span></div>
-                  <div class="cf-settings__item"><span class="cf-settings__action">锁定当前区域</span><span class="cf-settings__kbd cf-settings__kbd--soft">点击页面</span></div>
-                  <div class="cf-settings__item"><span class="cf-settings__action">锁定并复制</span><span class="cf-settings__kbd">Ctrl/Cmd+点击</span></div>
-                  <div class="cf-settings__item"><span class="cf-settings__action">复制锁定区域</span><span class="cf-settings__kbd cf-settings__kbd--soft">Copy 按钮</span></div>
-                </div>
+              <div class="cf-settings__list">
+                <div class="cf-settings__item"><span class="cf-settings__action">复制</span><span class="cf-settings__kbd">Ctrl/Cmd+C</span></div>
+                <div class="cf-settings__item"><span class="cf-settings__action">撤销</span><span class="cf-settings__kbd">Ctrl/Cmd+Z</span></div>
+                <div class="cf-settings__item"><span class="cf-settings__action">同级切换</span><span class="cf-settings__kbd">Tab / Shift+Tab</span></div>
+                <div class="cf-settings__item"><span class="cf-settings__action">父子级切换</span><span class="cf-settings__kbd">Enter / Shift+Enter</span></div>
+                <div class="cf-settings__item"><span class="cf-settings__action">退出锁定</span><span class="cf-settings__kbd">Esc</span></div>
               </div>
             </div>
           </div>
@@ -641,11 +723,14 @@ class CopyFrameInspector {
     const toastSettingsButtonEl = this.shadowRootRef.querySelector<HTMLButtonElement>(".cf-toast__settings");
     const settingsPanelEl = this.shadowRootRef.querySelector<HTMLDivElement>(".cf-settings");
     const settingsInputEl = this.shadowRootRef.querySelector<HTMLInputElement>(".cf-settings__input");
+    const settingsShortcutFieldEl =
+      this.shadowRootRef.querySelector<HTMLDivElement>(".cf-settings__shortcut-field");
+    const settingsShortcutTokenEl =
+      this.shadowRootRef.querySelector<HTMLSpanElement>(".cf-settings__shortcut-token");
     const settingsStatusEl = this.shadowRootRef.querySelector<HTMLDivElement>(".cf-settings__status");
     const settingsCloseButtonEl = this.shadowRootRef.querySelector<HTMLButtonElement>(".cf-settings__close");
+    const settingsSaveButtonEl = this.shadowRootRef.querySelector<HTMLButtonElement>(".cf-settings__save");
     const settingsFormEl = this.shadowRootRef.querySelector<HTMLFormElement>("form.cf-settings__field");
-    const toggleShortcutReferenceEl =
-      this.shadowRootRef.querySelector<HTMLSpanElement>("[data-cf-toggle-shortcut]");
 
     if (
       !borderEl ||
@@ -657,10 +742,12 @@ class CopyFrameInspector {
       !toastSettingsButtonEl ||
       !settingsPanelEl ||
       !settingsInputEl ||
+      !settingsShortcutFieldEl ||
+      !settingsShortcutTokenEl ||
       !settingsStatusEl ||
       !settingsCloseButtonEl ||
-      !settingsFormEl ||
-      !toggleShortcutReferenceEl
+      !settingsSaveButtonEl ||
+      !settingsFormEl
     ) {
       throw new Error("Copy Frame UI failed to initialize.");
     }
@@ -674,11 +761,12 @@ class CopyFrameInspector {
     this.toastSettingsButtonEl = toastSettingsButtonEl;
     this.settingsPanelEl = settingsPanelEl;
     this.settingsInputEl = settingsInputEl;
+    this.settingsShortcutFieldEl = settingsShortcutFieldEl;
+    this.settingsShortcutTokenEl = settingsShortcutTokenEl;
     this.settingsStatusEl = settingsStatusEl;
     this.settingsCloseButtonEl = settingsCloseButtonEl;
+    this.settingsSaveButtonEl = settingsSaveButtonEl;
     this.settingsFormEl = settingsFormEl;
-    this.toggleShortcutReferenceEl = toggleShortcutReferenceEl;
-    this.renderToggleShortcutReference();
 
     this.copyButtonEl.addEventListener("click", (event) => {
       event.preventDefault();
@@ -710,8 +798,22 @@ class CopyFrameInspector {
       this.hideSettingsPanel();
     });
 
+    this.settingsPanelEl.addEventListener("pointerdown", (event) => {
+      if (event.target !== this.settingsInputEl && this.shortcutInputFocused) {
+        this.settingsInputEl.blur();
+      }
+    });
+
     this.settingsInputEl.addEventListener("keydown", (event) => {
       this.handleSettingsShortcutInput(event);
+    });
+
+    this.settingsInputEl.addEventListener("focus", () => {
+      this.beginShortcutCapture();
+    });
+
+    this.settingsInputEl.addEventListener("blur", () => {
+      this.endShortcutCapture();
     });
 
     this.settingsFormEl.addEventListener("submit", (event) => {
@@ -757,17 +859,57 @@ class CopyFrameInspector {
     this.settingsPanelEl.style.display = "flex";
     this.settingsPanelEl.setAttribute("aria-hidden", "false");
     this.settingsInputEl.value = this.toggleShortcut.label;
-    this.renderToggleShortcutReference();
+    this.renderShortcutToken();
     this.settingsStatusEl.textContent = "";
     this.renderHostVisibility();
   }
 
   private hideSettingsPanel(): void {
+    this.settingsInputEl.blur();
+    this.endShortcutCapture({ immediate: true });
     this.settingsVisible = false;
     this.settingsPanelEl.style.display = "none";
     this.settingsPanelEl.setAttribute("aria-hidden", "true");
     this.settingsStatusEl.textContent = "";
     this.renderHostVisibility();
+  }
+
+  private beginShortcutCapture(): void {
+    this.shortcutInputFocused = true;
+    this.clearShortcutTokenLeaveTimer();
+    this.renderShortcutToken();
+    this.settingsShortcutFieldEl.classList.remove("is-leaving");
+    this.settingsShortcutFieldEl.classList.add("is-focused");
+  }
+
+  private endShortcutCapture(options: { immediate?: boolean } = {}): void {
+    this.shortcutInputFocused = false;
+    this.clearShortcutTokenLeaveTimer();
+    this.renderShortcutToken();
+    this.settingsShortcutFieldEl.classList.remove("is-focused");
+    this.settingsShortcutFieldEl.classList.add("is-leaving");
+
+    if (options.immediate) {
+      this.settingsShortcutFieldEl.classList.remove("is-leaving");
+      return;
+    }
+
+    this.shortcutTokenLeaveTimer = window.setTimeout(() => {
+      this.settingsShortcutFieldEl.classList.remove("is-leaving");
+      this.renderShortcutToken();
+      this.shortcutTokenLeaveTimer = null;
+    }, SHORTCUT_TOKEN_LEAVE_MS);
+  }
+
+  private clearShortcutTokenLeaveTimer(): void {
+    if (this.shortcutTokenLeaveTimer !== null) {
+      window.clearTimeout(this.shortcutTokenLeaveTimer);
+      this.shortcutTokenLeaveTimer = null;
+    }
+  }
+
+  private renderShortcutToken(): void {
+    this.settingsShortcutTokenEl.textContent = this.settingsInputEl.value.trim() || this.toggleShortcut.label;
   }
 
   private handleSettingsShortcutInput(event: KeyboardEvent): void {
@@ -786,6 +928,7 @@ class CopyFrameInspector {
 
     if (event.key === "Backspace" || event.key === "Delete") {
       this.settingsInputEl.value = "";
+      this.renderShortcutToken();
       this.settingsStatusEl.textContent = "请重新按一个组合键";
       return;
     }
@@ -796,6 +939,7 @@ class CopyFrameInspector {
     }
 
     this.settingsInputEl.value = shortcut.label;
+    this.renderShortcutToken();
     this.settingsStatusEl.textContent = "";
   }
 
@@ -810,7 +954,9 @@ class CopyFrameInspector {
     await chrome.storage.local.set({ [TOGGLE_SHORTCUT_STORAGE_KEY]: parsed.label });
     this.toggleShortcut = parsed;
     this.settingsInputEl.value = parsed.label;
-    this.renderToggleShortcutReference();
+    this.renderShortcutToken();
+    this.settingsInputEl.blur();
+    this.endShortcutCapture({ immediate: true });
     this.settingsStatusEl.textContent = "已保存";
   }
 
@@ -830,8 +976,8 @@ class CopyFrameInspector {
         this.toggleShortcut = parsed;
         if (this.settingsVisible) {
           this.settingsInputEl.value = parsed.label;
+          this.renderShortcutToken();
         }
-        this.renderToggleShortcutReference();
         return;
       }
     }
@@ -839,12 +985,8 @@ class CopyFrameInspector {
     this.toggleShortcut = parseShortcut(DEFAULT_TOGGLE_SHORTCUT)!;
     if (this.settingsVisible) {
       this.settingsInputEl.value = this.toggleShortcut.label;
+      this.renderShortcutToken();
     }
-    this.renderToggleShortcutReference();
-  }
-
-  private renderToggleShortcutReference(): void {
-    this.toggleShortcutReferenceEl.textContent = this.toggleShortcut.label;
   }
 
   private enterInspectMode(): void {
@@ -870,6 +1012,8 @@ class CopyFrameInspector {
   private exitInspectMode(): void {
     this.state = "idle";
     this.settingsVisible = false;
+    this.settingsInputEl.blur();
+    this.endShortcutCapture({ immediate: true });
     this.settingsPanelEl.style.display = "none";
     this.settingsPanelEl.setAttribute("aria-hidden", "true");
     this.currentElement = null;
@@ -1113,6 +1257,10 @@ class CopyFrameInspector {
   };
 
   private readonly handleKeydown = (event: KeyboardEvent): void => {
+    if (this.shortcutInputFocused || event.composedPath().includes(this.settingsInputEl)) {
+      return;
+    }
+
     const normalizedKey = event.key.toLowerCase();
     const isUndoShortcut =
       this.state === "locked" &&
@@ -1199,6 +1347,10 @@ class CopyFrameInspector {
   };
 
   private readonly handleGlobalKeydown = (event: KeyboardEvent): void => {
+    if (this.shortcutInputFocused || event.composedPath().includes(this.settingsInputEl)) {
+      return;
+    }
+
     const isTyping = isTypingTarget(event.target);
     if (isTyping || !matchesShortcut(event, this.toggleShortcut)) {
       return;
