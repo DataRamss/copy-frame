@@ -38,7 +38,8 @@ declare global {
 const TOGGLE_INSPECT_MODE = "toggleInspectMode";
 const ROOT_ID = "copy-frame-root";
 const LOGO_URL = chrome.runtime.getURL("logo.png");
-const SETTINGS_SHORTCUT = parseShortcut("Alt+K")!;
+const STARTUP_TOAST_MESSAGE = "Copy Frame 已启动，移动鼠标即可查看并复制区域名称。";
+const EXIT_TOAST_MESSAGE = "Copy Frame 已退出。";
 const MAX_TEXT_LENGTH = 80;
 const MAX_HINTS = 4;
 const TOAST_TOTAL_MS = 2400;
@@ -47,6 +48,8 @@ const TOAST_LEAVE_MS = 160;
 const TOAST_TEXT_DELAY_MS = 145;
 const TOAST_CHAR_STAGGER_MS = 16;
 const TOAST_CHAR_STAGGER_CAP_MS = 180;
+const TOAST_CHAR_ENTER_MS = 180;
+const TOAST_SETTINGS_REVEAL_BUFFER_MS = 40;
 const GENERIC_CLASS_NAMES = new Set([
   "active",
   "body",
@@ -80,16 +83,19 @@ class CopyFrameInspector {
   private readonly copyButtonEl: HTMLButtonElement;
   private readonly toastEl: HTMLDivElement;
   private readonly toastTextEl: HTMLDivElement;
+  private readonly toastSettingsButtonEl: HTMLButtonElement;
   private readonly settingsPanelEl: HTMLDivElement;
   private readonly settingsInputEl: HTMLInputElement;
   private readonly settingsStatusEl: HTMLDivElement;
   private readonly settingsCloseButtonEl: HTMLButtonElement;
   private readonly settingsFormEl: HTMLFormElement;
+  private readonly toggleShortcutReferenceEl: HTMLSpanElement;
   private currentElement: Element | null = null;
   private hoverElement: Element | null = null;
   private currentDescriptor: SelectionDescriptor | null = null;
   private toastTimer: number | null = null;
   private toastCleanupTimer: number | null = null;
+  private toastSettingsRevealTimer: number | null = null;
   private refreshFrame: number | null = null;
   private pointerClientX: number | null = null;
   private pointerClientY: number | null = null;
@@ -98,6 +104,7 @@ class CopyFrameInspector {
   private historyIndex = -1;
   private toggleShortcut: ShortcutConfig = parseShortcut(DEFAULT_TOGGLE_SHORTCUT)!;
   private settingsVisible = false;
+  private toastVisible = false;
 
   constructor() {
     this.host = document.createElement("div");
@@ -105,7 +112,6 @@ class CopyFrameInspector {
     this.host.style.display = "none";
     document.addEventListener("keydown", this.handleGlobalKeydown, true);
     chrome.storage.onChanged.addListener(this.handleStorageChange);
-    void this.loadToggleShortcut();
 
     this.shadowRootRef = this.host.attachShadow({ mode: "open" });
     this.shadowRootRef.innerHTML = `
@@ -203,7 +209,7 @@ class CopyFrameInspector {
           z-index: 1;
           right: 20px;
           bottom: 20px;
-          max-width: min(360px, calc(100vw - 40px));
+          max-width: min(420px, calc(100vw - 32px));
           display: none;
           overflow: hidden;
           pointer-events: none;
@@ -238,8 +244,17 @@ class CopyFrameInspector {
           opacity: 1;
         }
 
+        .cf-toast__body {
+          position: relative;
+          display: flex;
+          align-items: center;
+          min-width: 0;
+        }
+
         .cf-toast__content {
           position: relative;
+          flex: 1 1 auto;
+          min-width: 0;
           padding: 10px 14px;
           color: #ffffff;
           font-size: 12px;
@@ -247,6 +262,65 @@ class CopyFrameInspector {
           line-height: 1.45;
           white-space: pre-wrap;
           word-break: break-word;
+        }
+
+        .cf-toast--with-settings .cf-toast__content {
+          padding-right: 8px;
+        }
+
+        .cf-toast__settings {
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          flex: 0 0 28px;
+          width: 28px;
+          height: 18px;
+          margin: 0 8px 0 0;
+          border: 0;
+          border-radius: 4px;
+          background: rgba(255, 255, 255, 0.08);
+          color: #ffffff;
+          cursor: pointer;
+          opacity: 0;
+          filter: blur(6px);
+          pointer-events: none;
+          transition:
+            background 120ms ease-out,
+            opacity 140ms ease-out,
+            transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+            filter 180ms ease-out;
+          transform: translateX(6px);
+        }
+
+        .cf-toast__settings[hidden] {
+          display: none;
+        }
+
+        .cf-toast__settings.is-visible {
+          opacity: 1;
+          filter: blur(0);
+          pointer-events: auto;
+          transform: translateX(0);
+        }
+
+        .cf-toast__settings:hover {
+          background: rgba(255, 255, 255, 0.18);
+        }
+
+        .cf-toast__settings:focus-visible {
+          outline: 1px solid #ffffff;
+          outline-offset: 2px;
+        }
+
+        .cf-toast__settings.is-visible:active {
+          transform: translateY(1px);
+        }
+
+        .cf-toast__settings svg {
+          display: block;
+          width: 14px;
+          height: 14px;
         }
 
         .cf-toast-char {
@@ -257,8 +331,8 @@ class CopyFrameInspector {
           will-change: transform, opacity, filter;
           transition:
             opacity 110ms ease-out,
-            transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
-            filter 180ms ease-out;
+            transform ${TOAST_CHAR_ENTER_MS}ms cubic-bezier(0.22, 1, 0.36, 1),
+            filter ${TOAST_CHAR_ENTER_MS}ms ease-out;
           transition-delay: calc(var(--cf-toast-text-delay) + var(--cf-char-delay, 0ms));
         }
 
@@ -275,15 +349,18 @@ class CopyFrameInspector {
           top: 20px;
           right: 20px;
           width: min(320px, calc(100vw - 32px));
+          max-height: calc(100vh - 40px);
           display: none;
           flex-direction: column;
-          gap: 14px;
+          gap: 12px;
           padding: 16px;
           border: 1px solid rgba(17, 24, 39, 0.08);
           background: #fafafa;
           color: #111827;
           pointer-events: auto;
           box-sizing: border-box;
+          overflow-y: auto;
+          overscroll-behavior: contain;
         }
 
         .cf-settings__header {
@@ -377,6 +454,16 @@ class CopyFrameInspector {
           color: #111827;
         }
 
+        .cf-settings__reference {
+          display: grid;
+          gap: 10px;
+        }
+
+        .cf-settings__group {
+          display: grid;
+          gap: 5px;
+        }
+
         .cf-settings__row {
           display: flex;
           gap: 0;
@@ -415,35 +502,49 @@ class CopyFrameInspector {
 
         .cf-settings__list {
           display: grid;
-          gap: 4px;
+          gap: 3px;
         }
 
         .cf-settings__item {
-          display: flex;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
           align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          padding: 8px 8px;
+          gap: 10px;
+          padding: 7px 8px;
           background: #ffffff;
           font-size: 12px;
           line-height: 1.4;
         }
 
+        .cf-settings__action {
+          min-width: 0;
+          color: #111827;
+        }
+
         .cf-settings__kbd {
           display: inline-flex;
           align-items: center;
+          justify-content: center;
+          max-width: 150px;
           padding: 2px 8px;
           border-radius: 4px;
           background: #f9f9f9;
           color: #000000;
           line-height: 1.4;
           white-space: nowrap;
+          text-align: center;
+        }
+
+        .cf-settings__kbd--soft {
+          color: #4b5563;
+          white-space: normal;
         }
 
         @media (prefers-reduced-motion: reduce) {
           .cf-toast,
           .cf-toast__surface,
-          .cf-toast-char {
+          .cf-toast-char,
+          .cf-toast__settings {
             transition: none !important;
           }
 
@@ -462,7 +563,15 @@ class CopyFrameInspector {
         </div>
         <div class="cf-toast" role="status" aria-live="polite" aria-atomic="true">
           <div class="cf-toast__surface"></div>
-          <div class="cf-toast__content" aria-hidden="true"></div>
+          <div class="cf-toast__body">
+            <div class="cf-toast__content" aria-hidden="true"></div>
+            <button class="cf-toast__settings" type="button" aria-label="打开快捷键设置" title="打开快捷键设置" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.73v.52a2 2 0 0 1-1 1.73l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.73v-.52a2 2 0 0 1 1-1.73l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+            </button>
+          </div>
         </div>
         <div class="cf-settings" aria-hidden="true">
           <div class="cf-settings__header">
@@ -486,12 +595,37 @@ class CopyFrameInspector {
           </form>
           <div class="cf-settings__status" aria-live="polite"></div>
           <div class="cf-settings__field">
-            <div class="cf-settings__section">其他快捷键</div>
-            <div class="cf-settings__list">
-              <div class="cf-settings__item"><span>复制</span><span class="cf-settings__kbd">Ctrl+C / Ctrl+左键</span></div>
-              <div class="cf-settings__item"><span>同级切换</span><span class="cf-settings__kbd">Tab</span></div>
-              <div class="cf-settings__item"><span>层级切换</span><span class="cf-settings__kbd">Enter</span></div>
-              <div class="cf-settings__item"><span>快捷键设置</span><span class="cf-settings__kbd">${SETTINGS_SHORTCUT.label}</span></div>
+            <div class="cf-settings__section">快捷键与操作</div>
+            <div class="cf-settings__reference">
+              <div class="cf-settings__group">
+                <div class="cf-settings__section">开关</div>
+                <div class="cf-settings__list">
+                  <div class="cf-settings__item"><span class="cf-settings__action">开启 / 关闭检查</span><span class="cf-settings__kbd" data-cf-toggle-shortcut>${DEFAULT_TOGGLE_SHORTCUT}</span></div>
+                  <div class="cf-settings__item"><span class="cf-settings__action">插件图标开关</span><span class="cf-settings__kbd cf-settings__kbd--soft">点击图标</span></div>
+                  <div class="cf-settings__item"><span class="cf-settings__action">检查中关闭插件</span><span class="cf-settings__kbd">Esc</span></div>
+                </div>
+              </div>
+              <div class="cf-settings__group">
+                <div class="cf-settings__section">锁定后</div>
+                <div class="cf-settings__list">
+                  <div class="cf-settings__item"><span class="cf-settings__action">复制描述</span><span class="cf-settings__kbd">Ctrl/Cmd+C</span></div>
+                  <div class="cf-settings__item"><span class="cf-settings__action">撤销到上次锁定</span><span class="cf-settings__kbd">Ctrl/Cmd+Z</span></div>
+                  <div class="cf-settings__item"><span class="cf-settings__action">下一个同级</span><span class="cf-settings__kbd">Tab</span></div>
+                  <div class="cf-settings__item"><span class="cf-settings__action">上一个同级</span><span class="cf-settings__kbd">Shift+Tab</span></div>
+                  <div class="cf-settings__item"><span class="cf-settings__action">进入子元素</span><span class="cf-settings__kbd">Enter</span></div>
+                  <div class="cf-settings__item"><span class="cf-settings__action">回到父元素</span><span class="cf-settings__kbd">Shift+Enter</span></div>
+                  <div class="cf-settings__item"><span class="cf-settings__action">退出锁定</span><span class="cf-settings__kbd">Esc</span></div>
+                </div>
+              </div>
+              <div class="cf-settings__group">
+                <div class="cf-settings__section">鼠标</div>
+                <div class="cf-settings__list">
+                  <div class="cf-settings__item"><span class="cf-settings__action">悬停查看区域</span><span class="cf-settings__kbd cf-settings__kbd--soft">移动鼠标</span></div>
+                  <div class="cf-settings__item"><span class="cf-settings__action">锁定当前区域</span><span class="cf-settings__kbd cf-settings__kbd--soft">点击页面</span></div>
+                  <div class="cf-settings__item"><span class="cf-settings__action">锁定并复制</span><span class="cf-settings__kbd">Ctrl/Cmd+点击</span></div>
+                  <div class="cf-settings__item"><span class="cf-settings__action">复制锁定区域</span><span class="cf-settings__kbd cf-settings__kbd--soft">Copy 按钮</span></div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -504,11 +638,14 @@ class CopyFrameInspector {
     const copyButtonEl = this.shadowRootRef.querySelector<HTMLButtonElement>(".cf-copy");
     const toastEl = this.shadowRootRef.querySelector<HTMLDivElement>(".cf-toast");
     const toastTextEl = this.shadowRootRef.querySelector<HTMLDivElement>(".cf-toast__content");
+    const toastSettingsButtonEl = this.shadowRootRef.querySelector<HTMLButtonElement>(".cf-toast__settings");
     const settingsPanelEl = this.shadowRootRef.querySelector<HTMLDivElement>(".cf-settings");
     const settingsInputEl = this.shadowRootRef.querySelector<HTMLInputElement>(".cf-settings__input");
     const settingsStatusEl = this.shadowRootRef.querySelector<HTMLDivElement>(".cf-settings__status");
     const settingsCloseButtonEl = this.shadowRootRef.querySelector<HTMLButtonElement>(".cf-settings__close");
     const settingsFormEl = this.shadowRootRef.querySelector<HTMLFormElement>("form.cf-settings__field");
+    const toggleShortcutReferenceEl =
+      this.shadowRootRef.querySelector<HTMLSpanElement>("[data-cf-toggle-shortcut]");
 
     if (
       !borderEl ||
@@ -517,11 +654,13 @@ class CopyFrameInspector {
       !copyButtonEl ||
       !toastEl ||
       !toastTextEl ||
+      !toastSettingsButtonEl ||
       !settingsPanelEl ||
       !settingsInputEl ||
       !settingsStatusEl ||
       !settingsCloseButtonEl ||
-      !settingsFormEl
+      !settingsFormEl ||
+      !toggleShortcutReferenceEl
     ) {
       throw new Error("Copy Frame UI failed to initialize.");
     }
@@ -532,11 +671,14 @@ class CopyFrameInspector {
     this.copyButtonEl = copyButtonEl;
     this.toastEl = toastEl;
     this.toastTextEl = toastTextEl;
+    this.toastSettingsButtonEl = toastSettingsButtonEl;
     this.settingsPanelEl = settingsPanelEl;
     this.settingsInputEl = settingsInputEl;
     this.settingsStatusEl = settingsStatusEl;
     this.settingsCloseButtonEl = settingsCloseButtonEl;
     this.settingsFormEl = settingsFormEl;
+    this.toggleShortcutReferenceEl = toggleShortcutReferenceEl;
+    this.renderToggleShortcutReference();
 
     this.copyButtonEl.addEventListener("click", (event) => {
       event.preventDefault();
@@ -547,6 +689,19 @@ class CopyFrameInspector {
     this.copyButtonEl.addEventListener("pointerdown", (event) => {
       event.preventDefault();
       event.stopPropagation();
+    });
+
+    this.toastSettingsButtonEl.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+    });
+
+    this.toastSettingsButtonEl.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      this.showSettingsPanel();
     });
 
     this.settingsCloseButtonEl.addEventListener("click", (event) => {
@@ -563,6 +718,8 @@ class CopyFrameInspector {
       event.preventDefault();
       void this.saveToggleShortcut();
     });
+
+    void this.loadToggleShortcut();
   }
 
   toggle(): void {
@@ -590,7 +747,8 @@ class CopyFrameInspector {
   }
 
   private renderHostVisibility(): void {
-    this.host.style.display = this.state === "idle" && !this.settingsVisible ? "none" : "block";
+    this.host.style.display =
+      this.state === "idle" && !this.settingsVisible && !this.toastVisible ? "none" : "block";
   }
 
   private showSettingsPanel(): void {
@@ -599,6 +757,7 @@ class CopyFrameInspector {
     this.settingsPanelEl.style.display = "flex";
     this.settingsPanelEl.setAttribute("aria-hidden", "false");
     this.settingsInputEl.value = this.toggleShortcut.label;
+    this.renderToggleShortcutReference();
     this.settingsStatusEl.textContent = "";
     this.renderHostVisibility();
   }
@@ -648,14 +807,10 @@ class CopyFrameInspector {
       return;
     }
 
-    if (parsed.label === SETTINGS_SHORTCUT.label) {
-      this.settingsStatusEl.textContent = `Alt+K 已用于快捷键设置`;
-      return;
-    }
-
     await chrome.storage.local.set({ [TOGGLE_SHORTCUT_STORAGE_KEY]: parsed.label });
     this.toggleShortcut = parsed;
     this.settingsInputEl.value = parsed.label;
+    this.renderToggleShortcutReference();
     this.settingsStatusEl.textContent = "已保存";
   }
 
@@ -676,6 +831,7 @@ class CopyFrameInspector {
         if (this.settingsVisible) {
           this.settingsInputEl.value = parsed.label;
         }
+        this.renderToggleShortcutReference();
         return;
       }
     }
@@ -684,6 +840,11 @@ class CopyFrameInspector {
     if (this.settingsVisible) {
       this.settingsInputEl.value = this.toggleShortcut.label;
     }
+    this.renderToggleShortcutReference();
+  }
+
+  private renderToggleShortcutReference(): void {
+    this.toggleShortcutReferenceEl.textContent = this.toggleShortcut.label;
   }
 
   private enterInspectMode(): void {
@@ -703,7 +864,7 @@ class CopyFrameInspector {
     window.addEventListener("resize", this.handleViewportChange, true);
     this.renderHostVisibility();
 
-    this.showToast("Copy Frame 已启动，移动鼠标即可查看并复制区域名称。");
+    this.showStartupToast();
   }
 
   private exitInspectMode(): void {
@@ -726,13 +887,15 @@ class CopyFrameInspector {
     this.setCopyButtonVisible(false);
     this.renderSelection(null);
     this.renderHoverSelection(null);
-    this.renderHostVisibility();
+    this.hideToast({ updateHostVisibility: false });
 
     document.removeEventListener("mousemove", this.handleMouseMove, true);
     document.removeEventListener("click", this.handleDocumentClick, true);
     document.removeEventListener("keydown", this.handleKeydown, true);
     window.removeEventListener("scroll", this.handleViewportChange, true);
     window.removeEventListener("resize", this.handleViewportChange, true);
+
+    this.showExitToast();
   }
 
   private clearLockedSelection(): void {
@@ -1037,18 +1200,6 @@ class CopyFrameInspector {
 
   private readonly handleGlobalKeydown = (event: KeyboardEvent): void => {
     const isTyping = isTypingTarget(event.target);
-    if (this.state !== "idle" && !isTyping && matchesShortcut(event, SETTINGS_SHORTCUT)) {
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
-      if (this.settingsVisible) {
-        this.hideSettingsPanel();
-      } else {
-        this.showSettingsPanel();
-      }
-      return;
-    }
-
     if (isTyping || !matchesShortcut(event, this.toggleShortcut)) {
       return;
     }
@@ -1309,12 +1460,37 @@ class CopyFrameInspector {
     this.showToast("已复制区域描述，可以直接贴给 AI。");
   }
 
-  private showToast(message: string): void {
+  private showStartupToast(): void {
+    if (window.top !== window) {
+      return;
+    }
+
+    this.showToast(STARTUP_TOAST_MESSAGE, { showSettingsButton: true });
+  }
+
+  private showExitToast(): void {
+    if (window.top !== window) {
+      return;
+    }
+
+    this.showToast(EXIT_TOAST_MESSAGE);
+  }
+
+  private showToast(
+    message: string,
+    options: { showSettingsButton?: boolean } = {}
+  ): void {
+    this.ensureHostConnected();
     this.clearToastTimers();
     this.renderToastMessage(message);
+    this.toastVisible = true;
+    this.toastEl.classList.toggle("cf-toast--with-settings", Boolean(options.showSettingsButton));
+    this.toastSettingsButtonEl.hidden = !options.showSettingsButton;
+    this.toastSettingsButtonEl.classList.remove("is-visible");
     this.toastEl.setAttribute("aria-label", message);
     this.toastEl.classList.remove("is-entering", "is-visible", "is-leaving");
     this.toastEl.style.display = "block";
+    this.renderHostVisibility();
     void this.toastEl.offsetWidth;
     this.toastEl.classList.add("is-entering");
 
@@ -1324,6 +1500,14 @@ class CopyFrameInspector {
       this.toastTimer = null;
     }, TOAST_ENTER_MS);
 
+    if (options.showSettingsButton) {
+      this.toastSettingsRevealTimer = window.setTimeout(() => {
+        void this.toastSettingsButtonEl.offsetWidth;
+        this.toastSettingsButtonEl.classList.add("is-visible");
+        this.toastSettingsRevealTimer = null;
+      }, getToastTextRevealDelay(message));
+    }
+
     const leaveDelay = Math.max(TOAST_ENTER_MS, TOAST_TOTAL_MS - TOAST_LEAVE_MS);
     this.toastCleanupTimer = window.setTimeout(() => {
       this.toastEl.classList.remove("is-entering", "is-visible");
@@ -1332,9 +1516,28 @@ class CopyFrameInspector {
         this.toastEl.classList.remove("is-leaving");
         this.toastEl.style.display = "none";
         this.toastEl.removeAttribute("aria-label");
+        this.toastSettingsButtonEl.hidden = true;
+        this.toastSettingsButtonEl.classList.remove("is-visible");
+        this.toastEl.classList.remove("cf-toast--with-settings");
+        this.toastVisible = false;
+        this.renderHostVisibility();
         this.toastCleanupTimer = null;
       }, TOAST_LEAVE_MS);
     }, leaveDelay);
+  }
+
+  private hideToast(options: { updateHostVisibility?: boolean } = {}): void {
+    this.clearToastTimers();
+    this.toastEl.classList.remove("is-entering", "is-visible", "is-leaving", "cf-toast--with-settings");
+    this.toastEl.style.display = "none";
+    this.toastEl.removeAttribute("aria-label");
+    this.toastSettingsButtonEl.hidden = true;
+    this.toastSettingsButtonEl.classList.remove("is-visible");
+    this.toastTextEl.replaceChildren();
+    this.toastVisible = false;
+    if (options.updateHostVisibility ?? true) {
+      this.renderHostVisibility();
+    }
   }
 
   private clearToastTimers(): void {
@@ -1346,6 +1549,11 @@ class CopyFrameInspector {
     if (this.toastCleanupTimer) {
       window.clearTimeout(this.toastCleanupTimer);
       this.toastCleanupTimer = null;
+    }
+
+    if (this.toastSettingsRevealTimer) {
+      window.clearTimeout(this.toastSettingsRevealTimer);
+      this.toastSettingsRevealTimer = null;
     }
   }
 
@@ -1773,6 +1981,15 @@ function readNamedAttribute(
 
 function uniq(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
+}
+
+function getToastTextRevealDelay(message: string): number {
+  const lastCharDelay = Math.min(
+    Math.max(0, Array.from(message).length - 1) * TOAST_CHAR_STAGGER_MS,
+    TOAST_CHAR_STAGGER_CAP_MS
+  );
+
+  return TOAST_TEXT_DELAY_MS + lastCharDelay + TOAST_CHAR_ENTER_MS + TOAST_SETTINGS_REVEAL_BUFFER_MS;
 }
 
 function getNthOfType(element: Element): number {

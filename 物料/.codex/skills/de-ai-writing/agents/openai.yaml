@@ -1,0 +1,4 @@
+interface:
+  display_name: "De-AI Writing"
+  short_description: "去除文案中的 AI 味，保留原意并提升真人表达感。"
+  default_prompt: "Use $de-ai-writing to revise this draft so it sounds more human, more specific, and less templated."

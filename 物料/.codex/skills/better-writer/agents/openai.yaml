@@ -1,0 +1,4 @@
+interface:
+  display_name: "Better Writer"
+  short_description: "像成熟科技媒体编辑一样改稿，提升判断感与信息密度。"
+  default_prompt: "Use $better-writer to rewrite this Chinese draft into a sharper, cleaner, higher-density editorial version without inventing facts."
