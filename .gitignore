@@ -1,4 +1,5 @@
 node_modules/
 dist/
+物料/
 *.log
 .DS_Store
