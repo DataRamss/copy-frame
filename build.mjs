@@ -10,7 +10,7 @@ const manifest = {
   manifest_version: 3,
   name: "Copy Frame",
   description: "Point. Copy. For AI.",
-  version: "0.1.0",
+  version: "1.0.2",
   permissions: ["activeTab", "storage", "webNavigation"],
   host_permissions: ["<all_urls>"],
   web_accessible_resources: [

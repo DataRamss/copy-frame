@@ -2,6 +2,7 @@
 export {};
 
 const TOGGLE_INSPECT_MODE = "toggleInspectMode";
+const GET_PAGE_URL = "getPageUrl";
 
 async function broadcastToggle(tabId: number): Promise<void> {
   let frames: chrome.webNavigation.GetAllFrameResultDetails[] = [];
@@ -36,4 +37,12 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 
   await broadcastToggle(tab.id);
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type !== GET_PAGE_URL) {
+    return;
+  }
+
+  sendResponse({ url: sender.tab?.url ?? "" });
 });

@@ -36,10 +36,11 @@ declare global {
 }
 
 const TOGGLE_INSPECT_MODE = "toggleInspectMode";
+const GET_PAGE_URL = "getPageUrl";
 const ROOT_ID = "copy-frame-root";
 const LOGO_URL = chrome.runtime.getURL("logo.png");
-const STARTUP_TOAST_MESSAGE = "Copy Frame 已启动，移动鼠标即可查看并复制区域名称。";
-const EXIT_TOAST_MESSAGE = "Copy Frame 已退出。";
+const STARTUP_TOAST_MESSAGE = "Copy Frame 已开启";
+const EXIT_TOAST_MESSAGE = "Copy Frame 已关闭";
 const MAX_TEXT_LENGTH = 80;
 const MAX_HINTS = 4;
 const TOAST_TOTAL_MS = 2400;
@@ -1173,7 +1174,7 @@ class CopyFrameInspector {
       nextIndex -= 1;
     }
 
-    this.showToast("已经回到最早一次选中。");
+    this.showToast("已是最早选区");
   }
 
   private readonly handleViewportChange = (): void => {
@@ -1201,7 +1202,7 @@ class CopyFrameInspector {
 
     if (!this.currentElement.isConnected || !this.isSelectableElement(this.currentElement)) {
       this.clearLockedSelection();
-      this.showToast("当前选中内容已不可用。");
+      this.showToast("选区已失效");
       return;
     }
 
@@ -1294,7 +1295,7 @@ class CopyFrameInspector {
       const sibling = this.findSelectableSibling(event.shiftKey ? -1 : 1);
 
       if (!sibling) {
-        this.showToast("当前没有其他平行层可切换。");
+        this.showToast("没有其他同级元素");
         return;
       }
 
@@ -1308,7 +1309,7 @@ class CopyFrameInspector {
 
       const ancestor = this.findSelectableAncestor(this.currentElement?.parentElement ?? null);
       if (!ancestor) {
-        this.showToast("已经是最外层可选框架。");
+        this.showToast("已到最外层");
         return;
       }
 
@@ -1322,7 +1323,7 @@ class CopyFrameInspector {
 
       const child = this.findSelectableDescendant(this.currentElement);
       if (!child) {
-        this.showToast("当前没有更细一层。");
+        this.showToast("没有可选子级");
         return;
       }
 
@@ -1339,7 +1340,7 @@ class CopyFrameInspector {
 
     if (this.state === "locked") {
       this.clearLockedSelection();
-      this.showToast("已退出选中状态，再按一次 Esc 可退出插件。");
+      this.showToast("已取消锁定，再按 Esc 退出");
       return;
     }
 
@@ -1450,10 +1451,10 @@ class CopyFrameInspector {
 
   private getUnsupportedReason(element: Element): string {
     if (element.tagName.toLowerCase() === "canvas") {
-      return "当前区域是 canvas 画布，第一版只能复制 DOM 元素命名。";
+      return "暂不支持 Canvas";
     }
 
-    return "当前区域暂时无法提取稳定命名。";
+    return "暂不支持此区域";
   }
 
   private syncPointerTarget(): void {
@@ -1597,19 +1598,21 @@ class CopyFrameInspector {
 
   private async copyCurrentSelection(): Promise<void> {
     if (!this.currentDescriptor) {
-      this.showToast("请先悬停或点击目标区域。");
+      this.showToast("请先选择区域");
       return;
     }
 
-    const text = this.currentDescriptor.output;
+    const output = this.currentDescriptor.output;
+    const pageUrl = await getCurrentPageUrl();
+    const text = `页面：<${pageUrl}>\n${output}\n`;
     const copied = await copyText(text);
 
     if (!copied) {
-      this.showToast("复制失败，请重试。");
+      this.showToast("复制失败，请重试");
       return;
     }
 
-    this.showToast("已复制区域描述，可以直接贴给 AI。");
+    this.showToast("已复制");
   }
 
   private showStartupToast(): void {
@@ -2093,13 +2096,12 @@ function getTextSnippet(element: Element): string {
 
 function buildPageContext(): string {
   const title = sanitizeText(document.title || "");
-  const path = `${window.location.host}${window.location.pathname}`;
-
-  if (title && window.location.pathname && window.location.pathname !== "/") {
-    return `${title} / ${path}`;
+  if (title) {
+    return title;
   }
 
-  return title || path;
+  const pathSegments = window.location.pathname.split("/").filter(Boolean);
+  return pathSegments.at(-1) || window.location.host || "当前页面";
 }
 
 function sanitizeText(value: string): string {
@@ -2204,6 +2206,23 @@ async function copyText(value: string): Promise<boolean> {
     fallback.remove();
     return copied;
   }
+}
+
+async function getCurrentPageUrl(): Promise<string> {
+  try {
+    return window.top?.location.href || window.location.href;
+  } catch {
+    try {
+      const response = await chrome.runtime.sendMessage({ type: GET_PAGE_URL });
+      if (typeof response?.url === "string" && response.url) {
+        return response.url;
+      }
+    } catch {
+      // Fall through to the best URL available inside this frame.
+    }
+  }
+
+  return document.referrer || window.location.href;
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
