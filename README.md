@@ -4,6 +4,8 @@ Copy Frame 可以帮你在浏览器中快速高亮并锁定目标区域，一键
 
 如果你正在用 AI 开发网页、调试前端界面，或者使用 HTML 制作 PPT，Copy Frame 都很适合你。
 
+![Copy Frame 在网页中高亮并锁定目标区域](./assets/copy-frame-demo.png)
+
 ## 安装
 
 Copy Frame 已上线 Chrome 应用商店。你可以在商店搜索 `Copy Frame`，或者直接打开下面的链接：
